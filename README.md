@@ -29,28 +29,17 @@
 
 ### Установка как плагина OpenCode
 
-Плагины, опубликованные в npm или лежащие локально, подключаются в `opencode.json(c)` (глобальном `~/.config/opencode/opencode.json` или проектном):
+Плагин устанавливается одной командой из CLI OpenCode:
 
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugins": [
-    "opencode-session-tokens"
-  ]
-}
+```bash
+opencode plugin add github:alexandr777git/opencode-session-tokens
 ```
 
-Либо из локальной директории (например, если репозиторий склонирован рядом):
+Если бинарник называется иначе, работает эквивалентный вариант:
 
-```jsonc
-{
-  "plugins": [
-    "./opencode-session-tokens"
-  ]
-}
+```bash
+opencode-cli plugin add github:alexandr777git/opencode-session-tokens
 ```
-
-Плагины под `.opencode/plugins/` загружаются автоматически без настройки.
 
 ### Сборка из исходников
 
@@ -73,7 +62,7 @@ npx vite build --watch
 
 ## Использование
 
-1. Соберите плагин (`npx vite build`) и подключите его в `opencode.json(c)`, как описано выше.
+1. Соберите плагин (`npx vite build`) и установите его командой `opencode plugin add github:alexandr777git/opencode-session-tokens` (см. [Установка и настройка](#установка-и-настройка)).
 2. Откройте OpenCode Desktop и начните сессию.
 
 Примеры работы с плагином:
@@ -114,7 +103,7 @@ npx vite build --watch
 ## Конфигурация
 
 - Переменные окружения и опции плагина не используются.
-- Единственная точка настройки — подключение плагина в `opencode.json(c)` (см. [Установка и настройка](#установка-и-настройка)).
+- Единственная точка настройки — установка плагина через `opencode plugin add` (см. [Установка и настройка](#установка-и-настройка)).
 - Язык интерфейса (en/ru) подставляется автоматически из встроенных переводов `i18n` в `src/gui.tsx`.
 
 ## Лицензия и автор
