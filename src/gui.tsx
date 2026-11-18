@@ -205,8 +205,8 @@ export default Plugin.define({
         const t = entry.totals
         const total = t.input + t.output + t.reasoning
         return {
-          label: `Σ ${fmt(total)}`,
-          title: `За сессию: in ${t.input.toLocaleString("ru")} · out ${t.output.toLocaleString("ru")} · reasoning ${t.reasoning.toLocaleString("ru")}`,
+          label: `Σ ${fmt(total)} ⟳ ${fmt(t.cacheRead)}/${fmt(t.cacheWrite)}`,
+          title: `За сессию: in ${t.input.toLocaleString("ru")} · out ${t.output.toLocaleString("ru")} · reasoning ${t.reasoning.toLocaleString("ru")} · ${ctx.t("cache")} ${t.cacheRead.toLocaleString("ru")} / ${t.cacheWrite.toLocaleString("ru")}`,
           run: () => ctx.layout.toggle(`${ctx.id}:totals`, session),
         }
       },
