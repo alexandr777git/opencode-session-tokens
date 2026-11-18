@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, Show } from "solid-js"
 import {
-  Command, Panel, Slot, createLatest, usePlugin, Plugin,
+  Command, ComposerPill, Panel, Slot, createLatest, usePlugin, Plugin,
   type MountedSession, type PanelTab,
 } from "@opencode/plugin/gui"
 
@@ -13,6 +13,14 @@ type Read = { totals: Totals; count: number; sampleKeys: string | null }
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0)
 const zero = (): Totals =>
   ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 })
+
+function fmt(n: number): string {
+  if (!Number.isFinite(n)) return "0"
+  const abs = Math.abs(n)
+  if (abs >= 999_950) return `${(n / 1e6).toFixed(1)}M`
+  if (abs >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(Math.round(n))
+}
 
 async function fetchMessages(client: any, sessionID: string, signal: AbortSignal): Promise<any[]> {
   const attempts = [
@@ -33,8 +41,6 @@ async function fetchMessages(client: any, sessionID: string, signal: AbortSignal
   throw lastError ?? new Error("SDK: не нашёл метод списка сообщений")
 }
 
-// Адаптивный сумматор: понимает и v1-форму ({info:{role,tokens,cost}}),
-// и v2-форму ({type, tokens|usage, cost} на самом сообщении).
 async function readSession(client: any, sessionID: string, signal: AbortSignal): Promise<Read> {
   const messages = await fetchMessages(client, sessionID, signal)
   const t = zero()
@@ -71,7 +77,9 @@ function useRead(session: () => MountedSession | undefined) {
     () => ({ id: session()?.id, tick: tick() }),
     (_k, signal) => {
       const s = session()
-      return s ? readSession(s.server.client, s.id, signal) : Promise.resolve({ totals: zero(), count: 0, sampleKeys: null } as Read)
+      return s
+        ? readSession(s.server.client, s.id, signal)
+        : Promise.resolve({ totals: zero(), count: 0, sampleKeys: null } as Read)
     },
   )
 }
@@ -90,7 +98,7 @@ function TotalsView(props: { session: MountedSession }) {
   const data = useRead(() => props.session)
   const rec = () => data.latest ?? ({ totals: zero(), count: 0, sampleKeys: null } as Read)
   const t = () => rec().totals
-  const n = (x: number) => x.toLocaleString()
+  const n = (x: number) => x.toLocaleString("ru")
   return (
     <div style={{ padding: "12px", "font-family": ctx.appearance.font("mono"), "font-size": "12px", "line-height": 1.8 }}>
       <div style={{ "font-weight": 600, "margin-bottom": "8px" }}>{ctx.t("title")}</div>
@@ -124,7 +132,7 @@ function BottomStatus() {
   return (
     <Show when={ctx.sessions.current()}>
       <span style={{ "font-family": ctx.appearance.font("mono"), "font-size": "11px", opacity: 0.85 }}>
-        Σ in {t().input.toLocaleString()} · out {t().output.toLocaleString()} · ${t().cost.toFixed(4)}
+        Σ in {t().input.toLocaleString("ru")} · out {t().output.toLocaleString("ru")} · ${t().cost.toFixed(4)}
       </span>
     </Show>
   )
@@ -159,6 +167,49 @@ export default Plugin.define({
       run: () => {
         const s = ctx.sessions.current()
         if (s) ctx.layout.toggle(`${ctx.id}:totals`, s)
+      },
+    }))
+
+    // ---- Пилюля в композере рядом с "NN% ctx" ----
+    const cache = new Map<string, { at: number; totals: Totals }>()
+    const inflight = new Set<string>()
+    const [version, setVersion] = createSignal(0)
+    const ticker = setInterval(() => setVersion((v) => v + 1), 2000)
+    onCleanup(() => clearInterval(ticker))
+
+    const refresh = (session: MountedSession) => {
+      if (inflight.has(session.id)) return
+      inflight.add(session.id)
+      const controller = new AbortController()
+      readSession(session.server.client, session.id, controller.signal)
+        .then((read) => {
+          cache.set(session.id, { at: Date.now(), totals: read.totals })
+          if (cache.size > 64) {
+            const oldest = cache.keys().next().value
+            if (oldest !== undefined) cache.delete(oldest)
+          }
+          setVersion((v) => v + 1)
+        })
+        .catch(() => {})
+        .finally(() => inflight.delete(session.id))
+    }
+
+    ctx.add(ComposerPill, () => ({
+      id: "totals",
+      show: (input: any) => {
+        version() // реактивная зависимость: перерисовка при обновлении кэша
+        const session = input?.session as MountedSession | undefined
+        if (!session) return undefined
+        const entry = cache.get(session.id)
+        if (!entry) { refresh(session); return undefined }
+        if (Date.now() - entry.at > 2000) refresh(session)
+        const t = entry.totals
+        const total = t.input + t.output + t.reasoning
+        return {
+          label: `Σ ${fmt(total)}`,
+          title: `За сессию: in ${t.input.toLocaleString("ru")} · out ${t.output.toLocaleString("ru")} · reasoning ${t.reasoning.toLocaleString("ru")}`,
+          run: () => ctx.layout.toggle(`${ctx.id}:totals`, session),
+        }
       },
     }))
   },
