@@ -153,7 +153,6 @@ export default Plugin.define({
     ctx.add(Panel, {
       id: "totals",
       region: "side",
-      width: "narrow",
       list: (input) => (input.open.includes("totals") ? [tab] : []),
       render: (props) => <TotalsView session={props.session} />,
     })
