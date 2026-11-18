@@ -24,10 +24,9 @@
 
 ### Требования
 
-- Node.js и npm (Vite 7 требует Node.js ≥ 20.19 или ≥ 22.12).
 - OpenCode Desktop (GUI-часть плагина работает в десктоп-приложении).
 
-### Установка как плагина OpenCode
+### Установка
 
 Плагин устанавливается одной командой из CLI OpenCode:
 
@@ -41,28 +40,9 @@ opencode plugin add github:alexandr777git/opencode-session-tokens
 opencode-cli plugin add github:alexandr777git/opencode-session-tokens
 ```
 
-### Сборка из исходников
-
-```bash
-# клонирование репозитория
-git clone https://github.com/alexandr777git/opencode-session-tokens.git
-cd opencode-session-tokens
-
-# установка зависимостей (включая dev-зависимости для сборки)
-npm install
-
-# сборка GUI-бандла → dist/gui-experimental.cjs
-npx vite build
-
-# режим разработки: пересборка при изменениях
-npx vite build --watch
-```
-
-> **TODO:** в `package.json` нет секции `scripts` — команда сборки вызывается напрямую через `npx vite build`. При желании добавьте скрипт `"build": "vite build"`.
-
 ## Использование
 
-1. Соберите плагин (`npx vite build`) и установите его командой `opencode plugin add github:alexandr777git/opencode-session-tokens` (см. [Установка и настройка](#установка-и-настройка)).
+1. Установите плагин командой `opencode plugin add github:alexandr777git/opencode-session-tokens` (см. [Установка и настройка](#установка-и-настройка)).
 2. Откройте OpenCode Desktop и начните сессию.
 
 Примеры работы с плагином:
