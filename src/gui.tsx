@@ -9,10 +9,17 @@ type Totals = {
   cacheRead: number; cacheWrite: number; cost: number; turns: number
 }
 type Read = { totals: Totals; count: number; sampleKeys: string | null }
+type SubTotals = {
+  input: number; output: number; reasoning: number
+  cacheRead: number; cacheWrite: number; children: number
+}
+type SubRead = { sub: SubTotals }
 
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0)
 const zero = (): Totals =>
   ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 })
+const zeroSub = (): SubTotals =>
+  ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, children: 0 })
 
 function fmt(n: number): string {
   if (!Number.isFinite(n)) return "0"
@@ -69,9 +76,84 @@ async function readSession(client: any, sessionID: string, signal: AbortSignal):
   return { totals: t, count: messages.length, sampleKeys: sample }
 }
 
+// ---- Субагенты: дети + внуки по parentID, готовые агрегаты хоста (ADR-012) ----
+
+const MAX_PAGES = 10 // страниц по курсору на одного родителя
+const MAX_QUERIES = 16 // бюджет запросов list на одно чтение
+const MAX_KIDS = 64 // максимум учитываемых субагентов
+
+async function listSessions(
+  client: any, input: unknown, signal: AbortSignal,
+): Promise<{ list: any[]; next?: string } | null> {
+  try {
+    const res = await client.session.list(input, { signal })
+    const list = Array.isArray(res) ? res : (res?.data ?? res?.sessions ?? null)
+    if (!Array.isArray(list)) return null
+    const next = res?.cursor?.next
+    return { list, next: typeof next === "string" && next ? next : undefined }
+  } catch {
+    return null
+  }
+}
+
+async function listChildren(client: any, parentID: string, signal: AbortSignal): Promise<any[] | null> {
+  const out: any[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const input: Record<string, unknown> = { parentID, limit: 100, order: "asc" }
+    if (cursor) input.cursor = cursor
+    const res = await listSessions(client, input, signal)
+    if (!res) return out.length > 0 ? out : null
+    out.push(...res.list)
+    if (!res.next) break
+    cursor = res.next
+  }
+  return out
+}
+
+async function fetchChildren(client: any, sessionID: string, signal: AbortSignal): Promise<any[]> {
+  const seen = new Set<string>([sessionID])
+  const queue = [sessionID]
+  const kids: any[] = []
+  let queries = 0
+  while (queue.length > 0 && kids.length < MAX_KIDS) {
+    const parent = queue.shift()!
+    if (queries >= MAX_QUERIES) break
+    queries += 1
+    const found = await listChildren(client, parent, signal)
+    if (found === null) throw new Error("SDK: не нашёл метод session.list (фильтр parentID)")
+    for (const s of found) {
+      if (!s || typeof s !== "object") continue
+      const id = typeof s.id === "string" ? s.id : null
+      if (!id || seen.has(id)) continue
+      seen.add(id)
+      kids.push(s)
+      queue.push(id)
+    }
+  }
+  return kids
+}
+
+async function readChildren(client: any, sessionID: string, signal: AbortSignal): Promise<SubRead> {
+  const kids = await fetchChildren(client, sessionID, signal)
+  const t = zeroSub()
+  for (const s of kids) {
+    if (!s || typeof s !== "object") continue
+    const tok = s.tokens ?? s.usage // один ??-каскад на поле (И-7)
+    if (!tok || typeof tok !== "object") continue
+    t.input += num(tok.input)
+    t.output += num(tok.output)
+    t.reasoning += num(tok.reasoning)
+    t.cacheRead += num(tok.cache?.read ?? tok.cacheRead)
+    t.cacheWrite += num(tok.cache?.write ?? tok.cacheWrite)
+    t.children += 1
+  }
+  return { sub: t }
+}
+
 function useRead(session: () => MountedSession | undefined) {
   const [tick, setTick] = createSignal(0)
-  const timer = setInterval(() => setTick((n) => n + 1), 1500)
+  const timer = setInterval(() => setTick((n) => n + 1), 5000)
   onCleanup(() => clearInterval(timer))
   return createLatest(
     () => ({ id: session()?.id, tick: tick() }),
@@ -80,6 +162,21 @@ function useRead(session: () => MountedSession | undefined) {
       return s
         ? readSession(s.server.client, s.id, signal)
         : Promise.resolve({ totals: zero(), count: 0, sampleKeys: null } as Read)
+    },
+  )
+}
+
+function useSubRead(session: () => MountedSession | undefined) {
+  const [tick, setTick] = createSignal(0)
+  const timer = setInterval(() => setTick((n) => n + 1), 5000)
+  onCleanup(() => clearInterval(timer))
+  return createLatest(
+    () => ({ id: session()?.id, tick: tick() }),
+    (_k, signal) => {
+      const s = session()
+      return s
+        ? readChildren(s.server.client, s.id, signal)
+        : Promise.resolve({ sub: zeroSub() } as SubRead)
     },
   )
 }
@@ -96,8 +193,11 @@ function Row(props: { label: string; value: string }) {
 function TotalsView(props: { session: MountedSession }) {
   const ctx = usePlugin()
   const data = useRead(() => props.session)
+  const subs = useSubRead(() => props.session)
   const rec = () => data.latest ?? ({ totals: zero(), count: 0, sampleKeys: null } as Read)
+  const subRec = () => subs.latest ?? ({ sub: zeroSub() } as SubRead)
   const t = () => rec().totals
+  const sub = () => subRec().sub
   const n = (x: number) => x.toLocaleString("ru")
   return (
     <div style={{ padding: "12px", "font-family": ctx.appearance.font("mono"), "font-size": "12px", "line-height": 1.8 }}>
@@ -107,6 +207,10 @@ function TotalsView(props: { session: MountedSession }) {
       <Row label={ctx.t("reasoning")} value={n(t().reasoning)} />
       <Row label={ctx.t("cache")} value={`${n(t().cacheRead)} / ${n(t().cacheWrite)}`} />
       <Row label={ctx.t("turns")} value={n(t().turns)} />
+      <Show when={sub().children > 0}>
+        <Row label={ctx.t("subagents")} value={n(sub().input + sub().output + sub().reasoning)} />
+        <Row label={ctx.t("subagentsCache")} value={`${n(sub().cacheRead)} / ${n(sub().cacheWrite)}`} />
+      </Show>
       <Row label={ctx.t("cost")} value={`$${t().cost.toFixed(4)}`} />
       <Show when={data.error}>
         <div style={{ color: "#e5534b", "white-space": "pre-wrap", "margin-top": "8px" }}>
@@ -140,8 +244,8 @@ function BottomStatus() {
 
 export default Plugin.define({
   i18n: {
-    en: { title: "Session tokens", input: "Input", output: "Output", reasoning: "Reasoning", cache: "Cache r/w", turns: "Turns", cost: "Cost", open: "Show session tokens" },
-    ru: { title: "Токены сессии", input: "Входящие", output: "Исходящие", reasoning: "Рассуждения", cache: "Кэш ч/з", turns: "Ходов", cost: "Стоимость", open: "Показать токены сессии" },
+    en: { title: "Session tokens", input: "Input", output: "Output", reasoning: "Reasoning", cache: "Cache r/w", turns: "Turns", subagents: "Subagents", subagentsCache: "Subagents cache", cost: "Cost", open: "Show session tokens" },
+    ru: { title: "Токены сессии", input: "Входящие", output: "Исходящие", reasoning: "Рассуждения", cache: "Кэш ч/з", turns: "Ходов", subagents: "Субагенты", subagentsCache: "Кэш субагентов", cost: "Стоимость", open: "Показать токены сессии" },
   },
   setup(ctx) {
     const tab: PanelTab = {
@@ -173,7 +277,7 @@ export default Plugin.define({
     const cache = new Map<string, { at: number; totals: Totals }>()
     const inflight = new Set<string>()
     const [version, setVersion] = createSignal(0)
-    const ticker = setInterval(() => setVersion((v) => v + 1), 2000)
+    const ticker = setInterval(() => setVersion((v) => v + 1), 5000)
     onCleanup(() => clearInterval(ticker))
 
     const refresh = (session: MountedSession) => {
@@ -201,7 +305,7 @@ export default Plugin.define({
         if (!session) return undefined
         const entry = cache.get(session.id)
         if (!entry) { refresh(session); return undefined }
-        if (Date.now() - entry.at > 2000) refresh(session)
+        if (Date.now() - entry.at > 5000) refresh(session)
         const t = entry.totals
         const total = t.input + t.output + t.reasoning
         return {
