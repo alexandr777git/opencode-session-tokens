@@ -234,10 +234,8 @@ function TotalsView(props: { session: MountedSession }) {
 function BottomStatus() {
   const ctx = usePlugin()
   const data = useRead(() => ctx.sessions.current())
-  const subs = useSubRead(() => ctx.sessions.current())
   const t = () => (data.latest ?? ({ totals: zero(), count: 0, sampleKeys: null } as Read)).totals
-  const sub = () => (subs.latest ?? ({ sub: zeroSub() } as SubRead)).sub
-  const totalCost = () => t().cost + sub().cost
+  const totalCost = () => t().cost
   return (
     <Show when={ctx.sessions.current()}>
       <span style={{ "font-family": ctx.appearance.font("mono"), "font-size": "11px", opacity: 0.85 }}>
