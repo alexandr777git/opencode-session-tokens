@@ -8,7 +8,7 @@ type Totals = {
   input: number; output: number; reasoning: number
   cacheRead: number; cacheWrite: number; cost: number; turns: number
 }
-type Read = { totals: Totals; count: number; sampleKeys: string | null }
+type Read = { totals: Totals; count: number; sampleKeys: string | null; lastPrompt?: { input: number; cacheRead: number; cacheWrite: number } }
 type SubTotals = {
   input: number; output: number; reasoning: number
   cacheRead: number; cacheWrite: number; cost: number; children: number
@@ -52,6 +52,7 @@ async function readSession(client: any, sessionID: string, signal: AbortSignal):
   const messages = await fetchMessages(client, sessionID, signal)
   const t = zero()
   let sample: string | null = null
+  let lastPrompt: Read["lastPrompt"] = undefined
   for (const m of messages) {
     if (!m || typeof m !== "object") continue
     const info = m.info && typeof m.info === "object" ? m.info : m
@@ -65,15 +66,19 @@ async function readSession(client: any, sessionID: string, signal: AbortSignal):
       }
       continue
     }
-    t.input += num(tok.input)
+    const input = num(tok.input)
+    const cacheRead = num(tok.cache?.read ?? tok.cacheRead)
+    const cacheWrite = num(tok.cache?.write ?? tok.cacheWrite)
+    t.input += input
     t.output += num(tok.output)
     t.reasoning += num(tok.reasoning)
-    t.cacheRead += num(tok.cache?.read ?? tok.cacheRead)
-    t.cacheWrite += num(tok.cache?.write ?? tok.cacheWrite)
+    t.cacheRead += cacheRead
+    t.cacheWrite += cacheWrite
     t.cost += num(info.cost ?? m.cost)
     t.turns += 1
+    lastPrompt = { input, cacheRead, cacheWrite }
   }
-  return { totals: t, count: messages.length, sampleKeys: sample }
+  return { totals: t, count: messages.length, sampleKeys: sample, lastPrompt }
 }
 
 // ---- Субагенты: дети + внуки по parentID, готовые агрегаты хоста (ADR-012) ----
@@ -208,6 +213,9 @@ function TotalsView(props: { session: MountedSession }) {
       <Row label={ctx.t("output")} value={n(t().output)} />
       <Row label={ctx.t("reasoning")} value={n(t().reasoning)} />
       <Row label={ctx.t("cache")} value={`${n(t().cacheRead)} / ${n(t().cacheWrite)}`} />
+      <Show when={rec().lastPrompt}>
+        <Row label={ctx.t("contextSize")} value={n(rec().lastPrompt.input + rec().lastPrompt.cacheRead + rec().lastPrompt.cacheWrite)} />
+      </Show>
       <Row label={ctx.t("turns")} value={n(t().turns)} />
       <Show when={sub().children > 0}>
         <Row label={ctx.t("subagents")} value={n(sub().input + sub().output + sub().reasoning)} />
@@ -234,12 +242,15 @@ function TotalsView(props: { session: MountedSession }) {
 function BottomStatus() {
   const ctx = usePlugin()
   const data = useRead(() => ctx.sessions.current())
+  const subs = useSubRead(() => ctx.sessions.current())
   const t = () => (data.latest ?? ({ totals: zero(), count: 0, sampleKeys: null } as Read)).totals
-  const totalCost = () => t().cost
+  const sub = () => (subs.latest ?? ({ sub: zeroSub() } as SubRead)).sub
+  const parentCost = () => t().cost
+  const totalCost = () => t().cost + sub().cost
   return (
     <Show when={ctx.sessions.current()}>
       <span style={{ "font-family": ctx.appearance.font("mono"), "font-size": "11px", opacity: 0.85 }}>
-        Σ in {t().input.toLocaleString("ru")} · out {t().output.toLocaleString("ru")} · ${totalCost().toFixed(4)}
+        Σ in {t().input.toLocaleString("ru")} · out {t().output.toLocaleString("ru")} · ${parentCost().toFixed(4)} (${totalCost().toFixed(4)})
       </span>
     </Show>
   )
@@ -247,8 +258,8 @@ function BottomStatus() {
 
 export default Plugin.define({
   i18n: {
-    en: { title: "Session tokens", input: "Input", output: "Output", reasoning: "Reasoning", cache: "Cache r/w", turns: "Turns", subagents: "Subagents", subagentsCache: "Subagents cache", totalCost: "Total cost", cost: "Cost", open: "Show session tokens", menuTitle: "Session tokens" },
-    ru: { title: "Токены сессии", input: "Входящие", output: "Исходящие", reasoning: "Рассуждения", cache: "Кэш ч/з", turns: "Ходов", subagents: "Субагенты", subagentsCache: "Кэш субагентов", totalCost: "Итого стоимость", cost: "Стоимость", open: "Показать токены сессии", menuTitle: "Токены сессии" },
+    en: { title: "Session tokens", input: "Input (excl. cache)", output: "Output", reasoning: "Reasoning", cache: "Cache r/w", contextSize: "Context size", turns: "Turns", subagents: "Subagents", subagentsCache: "Subagents cache", totalCost: "Total cost", cost: "Cost", open: "Show session tokens", menuTitle: "Session tokens" },
+    ru: { title: "Токены сессии", input: "Входящие (без кэша)", output: "Исходящие", reasoning: "Рассуждения", cache: "Кэш ч/з", contextSize: "Размер контекста", turns: "Ходов", subagents: "Субагенты", subagentsCache: "Кэш субагентов", totalCost: "Итого стоимость", cost: "Стоимость", open: "Показать токены сессии", menuTitle: "Токены сессии" },
   },
   setup(ctx) {
     const tab: PanelTab = {
