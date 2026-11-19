@@ -1,6 +1,7 @@
 {
   "name": "opencode-session-tokens",
   "version": "0.3.0",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

@@ -1,6 +1,6 @@
 import { createSignal, onCleanup, Show } from "solid-js"
 import {
-  Command, ComposerPill, Panel, Slot, createLatest, usePlugin, Plugin,
+  Command, ComposerPill, MenuItem, Panel, Slot, createLatest, usePlugin, Plugin,
   type MountedSession, type PanelTab,
 } from "@opencode/plugin/gui"
 
@@ -11,7 +11,7 @@ type Totals = {
 type Read = { totals: Totals; count: number; sampleKeys: string | null }
 type SubTotals = {
   input: number; output: number; reasoning: number
-  cacheRead: number; cacheWrite: number; children: number
+  cacheRead: number; cacheWrite: number; cost: number; children: number
 }
 type SubRead = { sub: SubTotals }
 
@@ -19,7 +19,7 @@ const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v)
 const zero = (): Totals =>
   ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 })
 const zeroSub = (): SubTotals =>
-  ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, children: 0 })
+  ({ input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, cost: 0, children: 0 })
 
 function fmt(n: number): string {
   if (!Number.isFinite(n)) return "0"
@@ -146,6 +146,7 @@ async function readChildren(client: any, sessionID: string, signal: AbortSignal)
     t.reasoning += num(tok.reasoning)
     t.cacheRead += num(tok.cache?.read ?? tok.cacheRead)
     t.cacheWrite += num(tok.cache?.write ?? tok.cacheWrite)
+    t.cost += num(s.cost)
     t.children += 1
   }
   return { sub: t }
@@ -198,6 +199,7 @@ function TotalsView(props: { session: MountedSession }) {
   const subRec = () => subs.latest ?? ({ sub: zeroSub() } as SubRead)
   const t = () => rec().totals
   const sub = () => subRec().sub
+  const totalCost = () => t().cost + sub().cost
   const n = (x: number) => x.toLocaleString("ru")
   return (
     <div style={{ padding: "12px", "font-family": ctx.appearance.font("mono"), "font-size": "12px", "line-height": 1.8 }}>
@@ -211,7 +213,7 @@ function TotalsView(props: { session: MountedSession }) {
         <Row label={ctx.t("subagents")} value={n(sub().input + sub().output + sub().reasoning)} />
         <Row label={ctx.t("subagentsCache")} value={`${n(sub().cacheRead)} / ${n(sub().cacheWrite)}`} />
       </Show>
-      <Row label={ctx.t("cost")} value={`$${t().cost.toFixed(4)}`} />
+      <Row label={ctx.t("totalCost")} value={`$${totalCost().toFixed(4)}`} />
       <Show when={data.error}>
         <div style={{ color: "#e5534b", "white-space": "pre-wrap", "margin-top": "8px" }}>
           {String((data.error as any)?.message ?? data.error)}
@@ -232,11 +234,14 @@ function TotalsView(props: { session: MountedSession }) {
 function BottomStatus() {
   const ctx = usePlugin()
   const data = useRead(() => ctx.sessions.current())
+  const subs = useSubRead(() => ctx.sessions.current())
   const t = () => (data.latest ?? ({ totals: zero(), count: 0, sampleKeys: null } as Read)).totals
+  const sub = () => (subs.latest ?? ({ sub: zeroSub() } as SubRead)).sub
+  const totalCost = () => t().cost + sub().cost
   return (
     <Show when={ctx.sessions.current()}>
       <span style={{ "font-family": ctx.appearance.font("mono"), "font-size": "11px", opacity: 0.85 }}>
-        Σ in {t().input.toLocaleString("ru")} · out {t().output.toLocaleString("ru")} · ${t().cost.toFixed(4)}
+        Σ in {t().input.toLocaleString("ru")} · out {t().output.toLocaleString("ru")} · ${totalCost().toFixed(4)}
       </span>
     </Show>
   )
@@ -244,8 +249,8 @@ function BottomStatus() {
 
 export default Plugin.define({
   i18n: {
-    en: { title: "Session tokens", input: "Input", output: "Output", reasoning: "Reasoning", cache: "Cache r/w", turns: "Turns", subagents: "Subagents", subagentsCache: "Subagents cache", cost: "Cost", open: "Show session tokens" },
-    ru: { title: "Токены сессии", input: "Входящие", output: "Исходящие", reasoning: "Рассуждения", cache: "Кэш ч/з", turns: "Ходов", subagents: "Субагенты", subagentsCache: "Кэш субагентов", cost: "Стоимость", open: "Показать токены сессии" },
+    en: { title: "Session tokens", input: "Input", output: "Output", reasoning: "Reasoning", cache: "Cache r/w", turns: "Turns", subagents: "Subagents", subagentsCache: "Subagents cache", totalCost: "Total cost", cost: "Cost", open: "Show session tokens", menuTitle: "Session tokens" },
+    ru: { title: "Токены сессии", input: "Входящие", output: "Исходящие", reasoning: "Рассуждения", cache: "Кэш ч/з", turns: "Ходов", subagents: "Субагенты", subagentsCache: "Кэш субагентов", totalCost: "Итого стоимость", cost: "Стоимость", open: "Показать токены сессии", menuTitle: "Токены сессии" },
   },
   setup(ctx) {
     const tab: PanelTab = {
@@ -267,6 +272,21 @@ export default Plugin.define({
       section: "session",
       slash: { name: "tokens" },
       enabled: !!ctx.sessions.current(),
+      run: () => {
+        const s = ctx.sessions.current()
+        if (s) ctx.layout.toggle(`${ctx.id}:totals`, s)
+      },
+    }))
+
+    ctx.add(MenuItem, (): MenuItem => ({
+      id: "open-totals",
+      menu: "session.panel",
+      get title() { return ctx.t("menuTitle") },
+      icon: "outline-list-changelog",
+      get opened() {
+        const s = ctx.sessions.current()
+        return !!s && ctx.layout.state(`${ctx.id}:totals`, s) !== "closed"
+      },
       run: () => {
         const s = ctx.sessions.current()
         if (s) ctx.layout.toggle(`${ctx.id}:totals`, s)
