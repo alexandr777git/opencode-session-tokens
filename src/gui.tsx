@@ -307,12 +307,18 @@ export default Plugin.define({
     const inflight = new Set<string>()
     const [version, setVersion] = createSignal(0)
     const ticker = setInterval(() => setVersion((v) => v + 1), 5000)
-    onCleanup(() => clearInterval(ticker))
+
+    let pendingController: AbortController | null = null
+    onCleanup(() => {
+      clearInterval(ticker)
+      pendingController?.abort()
+    })
 
     const refresh = (session: MountedSession) => {
       if (inflight.has(session.id)) return
       inflight.add(session.id)
       const controller = new AbortController()
+      pendingController = controller
       readSession(session.server.client, session.id, controller.signal)
         .then((read) => {
           cache.set(session.id, { at: Date.now(), totals: read.totals })
